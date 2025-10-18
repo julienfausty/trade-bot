@@ -1974,6 +1974,7 @@ version = "0.1.0"
 dependencies = [
  "kraken-async-rs",
  "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
