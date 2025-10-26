@@ -1,12 +1,25 @@
+use kraken_async_rs::clients::core_kraken_client::CoreKrakenClient;
+use kraken_async_rs::clients::http_response_types::ResultErrorResponse;
+use kraken_async_rs::clients::kraken_client::KrakenClient;
+use kraken_async_rs::crypto::nonce_provider::{IncreasingNonceProvider, NonceProvider};
+use kraken_async_rs::request_types::{CandlestickInterval, OHLCRequest, StringCSV};
+use kraken_async_rs::response_types::OHLC;
+use kraken_async_rs::secrets::secrets_provider::{SecretsProvider, StaticSecretsProvider};
 use kraken_async_rs::test_support::set_up_logging;
 use kraken_async_rs::wss::{KrakenMessageStream, KrakenWSSClient, WS_KRAKEN, WS_KRAKEN_AUTH};
 use kraken_async_rs::wss::{Message, OhlcSubscription, WssMessage};
-use std::time::Duration;
+
+use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tokio_stream::StreamExt;
+
 use tracing::{info, warn};
 
-struct Feed {
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+struct LiveFeed {
     // timeout of the websocket connection
     timeout: u64,
 
@@ -14,10 +27,14 @@ struct Feed {
     stream: KrakenMessageStream<WssMessage>,
 }
 
-impl Feed {
+impl LiveFeed {
     // Create a new web socket feed to Kraken server for OHLC data with specified time interval
     // (in s) and timeout (in min) following provided tickers.
-    pub async fn new(timeout: u64, interval: i32, tickers: Vec<String>) -> Result<Feed, String> {
+    pub async fn new(
+        timeout: u64,
+        interval: i32,
+        tickers: Vec<String>,
+    ) -> Result<LiveFeed, String> {
         let mut client = KrakenWSSClient::new_with_tracing(WS_KRAKEN, WS_KRAKEN_AUTH, true, true);
         let mut stream = match client.connect::<WssMessage>().await {
             Ok(stream) => stream,
@@ -33,7 +50,7 @@ impl Feed {
             Err(message) => return Err(format!("{:?}", message)),
         };
 
-        Ok(Feed { timeout, stream })
+        Ok(LiveFeed { timeout, stream })
     }
 
     // Poll for data from the feed
@@ -49,11 +66,96 @@ impl Feed {
     }
 }
 
+pub trait CandlestickIntervalConvertible {
+    fn into_candlestick_interval(&self) -> CandlestickInterval
+    where
+        Self: PartialOrd<i32>,
+    {
+        if *self < 5 {
+            CandlestickInterval::Minute
+        } else if *self < 15 {
+            CandlestickInterval::Minutes5
+        } else if *self < 30 {
+            CandlestickInterval::Minutes15
+        } else if *self < 60 {
+            CandlestickInterval::Minutes30
+        } else if *self < 240 {
+            CandlestickInterval::Hour
+        } else if *self < 1440 {
+            CandlestickInterval::Hours4
+        } else if *self < 10080 {
+            CandlestickInterval::Day
+        } else if *self < 21600 {
+            CandlestickInterval::Week
+        } else {
+            CandlestickInterval::Days15
+        }
+    }
+}
+
+impl CandlestickIntervalConvertible for i32 {}
+
+struct HistoricalFeed {
+    ohlc_map: HashMap<String, Vec<OHLC>>,
+}
+
+impl HistoricalFeed {
+    // Create a historical feed from Kraken server using OHLC data with specified time interval
+    // (in s) and timeout (in min) for provided tickers.
+    pub async fn new(
+        ago: i64,
+        interval: i32,
+        tickers: Vec<String>,
+    ) -> Result<HistoricalFeed, String> {
+        let secrets_provider: Box<Arc<Mutex<dyn SecretsProvider>>> =
+            Box::new(Arc::new(Mutex::new(StaticSecretsProvider::new("", ""))));
+        let nonce_provider: Box<Arc<Mutex<dyn NonceProvider>>> =
+            Box::new(Arc::new(Mutex::new(IncreasingNonceProvider::new())));
+
+        let mut client = CoreKrakenClient::new(secrets_provider, nonce_provider);
+
+        let server_time = match client.get_server_time().await {
+            Ok(response) => {
+                if let ResultErrorResponse {
+                    result: Some(time), ..
+                } = response
+                {
+                    time.unix_time
+                } else {
+                    return Err(format!("{:?}", response.error));
+                }
+            }
+            Err(network_error) => return Err(format!("{:?}", network_error)),
+        };
+
+        let ohlc_request = OHLCRequest::builder(StringCSV::new(tickers).to_string())
+            .since(server_time - ago)
+            .interval(interval.into_candlestick_interval())
+            .build();
+
+        let ohlc_map = match client.get_ohlc(&ohlc_request).await {
+            Ok(response) => {
+                if let ResultErrorResponse {
+                    result: Some(ohlc), ..
+                } = response
+                {
+                    ohlc.ohlc
+                } else {
+                    return Err(format!("{:?}", response.error));
+                }
+            }
+            Err(network_err) => return Err(format!("{:?}", network_err)),
+        };
+
+        Ok(HistoricalFeed { ohlc_map })
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), String> {
     set_up_logging("trade-bot.log");
 
-    let mut feed = match Feed::new(10, 5, vec!["ETH/EUR".to_string()]).await {
+    let mut feed = match LiveFeed::new(10, 5, vec!["ETH/EUR".to_string()]).await {
         Ok(feed) => feed,
         Err(message) => return Err(message),
     };
