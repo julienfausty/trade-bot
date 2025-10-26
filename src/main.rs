@@ -15,7 +15,7 @@ use tokio_stream::StreamExt;
 
 use tracing::{info, warn};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -96,7 +96,7 @@ pub trait CandlestickIntervalConvertible {
 impl CandlestickIntervalConvertible for i32 {}
 
 struct HistoricalFeed {
-    ohlc_map: HashMap<String, Vec<OHLC>>,
+    queue: VecDeque<HashMap<String, OHLC>>,
 }
 
 impl HistoricalFeed {
@@ -147,7 +147,33 @@ impl HistoricalFeed {
             Err(network_err) => return Err(format!("{:?}", network_err)),
         };
 
-        Ok(HistoricalFeed { ohlc_map })
+        if ohlc_map.is_empty() {
+            return Ok(HistoricalFeed {
+                queue: VecDeque::new(),
+            });
+        }
+
+        let lengths: Vec<usize> = ohlc_map.iter().map(|(_, ohlc)| ohlc.len()).collect();
+
+        let reference = lengths[0];
+        if !lengths.iter().all(|&length| length == reference) {
+            return Err("Returned OHLC data does not have the same lengths.".into());
+        }
+
+        let queue: VecDeque<HashMap<String, OHLC>> = (0..reference)
+            .map(|index| {
+                ohlc_map
+                    .iter()
+                    .map(|(ticker, data)| (ticker.clone(), data[index].clone()))
+                    .collect()
+            })
+            .collect();
+
+        Ok(HistoricalFeed { queue })
+    }
+
+    pub async fn consume(&mut self) -> Option<HashMap<String, OHLC>> {
+        self.queue.pop_front()
     }
 }
 
