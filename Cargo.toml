@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+itertools = "0.14.0"
 kraken-async-rs = "0.13.0"
 tokio = {version="1.47.2", features=["full"]}
 tokio-stream = {version="0.1.17", features=["full"]}
