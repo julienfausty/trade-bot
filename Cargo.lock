@@ -1189,6 +1189,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rbtree"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "014d09f9f4dbb178240d78610a8ddbc18c57120b62f182fa859e0dd02b03708c"
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1991,6 +1997,7 @@ version = "0.1.0"
 dependencies = [
  "itertools",
  "kraken-async-rs",
+ "rbtree",
  "tokio",
  "tokio-stream",
  "tracing",
