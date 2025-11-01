@@ -1,4 +1,6 @@
+mod analysis;
 mod feeds;
+
 use crate::feeds::LiveFeed;
 
 use kraken_async_rs::test_support::set_up_logging;
