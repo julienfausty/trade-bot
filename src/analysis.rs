@@ -18,6 +18,21 @@ pub struct OHLC {
     pub count: i64,
 }
 
+impl OHLC {
+    fn new_zero() -> OHLC {
+        OHLC {
+            time: 0,
+            open: 0.0,
+            high: 0.0,
+            low: 0.0,
+            close: 0.0,
+            vwap: 0.0,
+            volume: 0.0,
+            count: 0,
+        }
+    }
+}
+
 impl Add for OHLC {
     type Output = Self;
 
@@ -161,6 +176,50 @@ impl MovingStatistics {
 
         Ok(means)
     }
+
+    pub async fn deviations(
+        &self,
+        means: &HashMap<usize, Vec<OHLC>>,
+    ) -> Result<HashMap<usize, Vec<OHLC>>, String> {
+        for window in means.keys() {
+            if *window > self.universe_window {
+                return Err(format!(
+                    "Tried to analyse moving window ({:}) that was larger than universe window {:}.",
+                    window, self.universe_window
+                ));
+            }
+
+            if means[window].len() != (self.universe_window - *window + 1) {
+                return Err(format!(
+                    "Means passed to deviation calculation don't have correct length for window {:}: expected {:}, found {:}",
+                    *window,
+                    self.universe_window - *window + 1,
+                    means[window].len()
+                ));
+            }
+        }
+
+        let read_universe = match self.universe.read() {
+            Ok(read_lock) => read_lock,
+            Err(error) => return Err(format!("{:?}", error)),
+        };
+
+        let mut cloned: HashMap<usize, Vec<OHLC>> = means
+            .iter()
+            .map(|(window, values)| (window.clone(), vec![OHLC::new_zero(); values.len()]))
+            .collect();
+
+        for (index, (_, ohlc)) in read_universe.iter().enumerate() {
+            for (window, values) in means {
+                let deviation = ohlc.clone() - values[index].clone();
+                let _ = (0..*window)
+                    .map(|shift| cloned[window][index + shift] += deviation.clone())
+                    .collect::<Vec<_>>();
+            }
+        }
+
+        Err("Not implemented yet".to_string())
+    }
 }
 
 #[cfg(test)]
@@ -169,16 +228,7 @@ mod tests {
     use super::*;
 
     fn zero_ohlc() -> OHLC {
-        OHLC {
-            time: 0,
-            open: 0.0,
-            high: 0.0,
-            low: 0.0,
-            close: 0.0,
-            vwap: 0.0,
-            volume: 0.0,
-            count: 0,
-        }
+        OHLC::new_zero()
     }
 
     fn const_ohlc(val: f32) -> OHLC {
